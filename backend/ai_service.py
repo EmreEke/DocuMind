@@ -3,6 +3,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from models import Document, DocumentChunk
 import shutil
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -44,9 +45,10 @@ def process_and_store_document(file, db: Session):
         documents = loader.load()
         
         # 3. Metni Parçala (Chunking) - KRİTİK KARAR
+        # Daha büyük chunk size = daha fazla bağlam, daha iyi anlama
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,    # Her parça 1000 karakter
-            chunk_overlap=200   # Parçalar birbirinin içine 200 karakter girsin (bağlam kopmasın diye)
+            chunk_size=1500,    # Her parça 1500 karakter (artırıldı)
+            chunk_overlap=300   # Parçalar birbirinin içine 300 karakter girsin (bağlam kopmasın diye)
         )
         chunks = text_splitter.split_documents(documents)
 
@@ -120,10 +122,15 @@ def get_answer_from_docs(question: str, db: Session, doc_id: int = None):
         all_chunks = query.order_by(DocumentChunk.chunk_index).limit(50).all()
         
         if not all_chunks:
-            return {"answer": "Üzgünüm, dokümanlarda bilgi bulamadım.", "sources": []}
+            return {"answer": "Üzgünüm, dokümanlarda bilgi bulamadım.", "sources": [], "source_filenames": []}
         
         # Tüm chunk'ları birleştir
         context_text = "\n\n".join([chunk.chunk_text for chunk in all_chunks])
+        
+        # Özet için de dosya adlarını al
+        unique_doc_ids = list(set([chunk.document_id for chunk in all_chunks]))
+        source_documents = db.query(Document).filter(Document.id.in_(unique_doc_ids)).all()
+        source_filenames = [doc.filename for doc in source_documents]
         
         # Özet için özel prompt
         llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.3)
@@ -143,41 +150,100 @@ def get_answer_from_docs(question: str, db: Session, doc_id: int = None):
         
         user_message = f"Lütfen yukarıdaki dokümanın kapsamlı bir özetini hazırla."
         
+        # Özet için response'u burada üret ve döndür
+        messages = [
+            SystemMessage(content=system_prompt.format(context=context_text)),
+            HumanMessage(content=user_message)
+        ]
+        
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.3)
+        response = llm.invoke(messages)
+        
+        return {
+            "answer": response.content,
+            "sources": unique_doc_ids,
+            "source_filenames": source_filenames
+        }
+        
     else:
-        # NORMAL SORU: En benzer chunk'ları bul
-        # 2. Soruyu Vektöre Çevir
+        # NORMAL SORU: Hibrit arama (Vektörel + Anahtar Kelime)
+        # 1. Sorudan anahtar kelimeleri çıkar (basit tokenizasyon)
+        question_words = [word.lower().strip('.,!?;:()[]{}"\'') 
+                         for word in question.split() 
+                         if len(word) > 2]  # 2 karakterden uzun kelimeler
+        
+        # 2. Vektörel Arama: En benzer chunk'ları bul
         question_vector = embeddings.embed_query(question)
         
-        # 3. Veritabanında En Benzer 3 Parçayı Bul (Postgres pgvector gücü!)
-        # L2 distance operatörü (<->) kullanarak en yakın komşuları buluyoruz.
         query = db.query(DocumentChunk)
-        
-        # Eğer belirli bir doküman seçildiyse, sadece o dokümanın chunk'larını filtrele
         if doc_id is not None:
             query = query.filter(DocumentChunk.document_id == doc_id)
         
-        closest_chunks = query.order_by(
+        # Vektörel arama ile en yakın 10 chunk al
+        vector_chunks = query.order_by(
             DocumentChunk.embedding.l2_distance(question_vector)
-        ).limit(3).all()
+        ).limit(10).all()
         
+        # 3. Anahtar Kelime Arama: Sorudaki kelimeleri içeren chunk'ları bul (OR mantığı)
+        keyword_chunks = []
+        if question_words:
+            keyword_query = db.query(DocumentChunk)
+            if doc_id is not None:
+                keyword_query = keyword_query.filter(DocumentChunk.document_id == doc_id)
+            
+            # İlk 5 anahtar kelimeyi kullan ve OR mantığıyla birleştir
+            # En az bir kelime eşleşirse chunk'ı al
+            keyword_filters = [
+                DocumentChunk.chunk_text.ilike(f'%{word}%')
+                for word in question_words[:5]
+            ]
+            
+            if keyword_filters:
+                keyword_query = keyword_query.filter(or_(*keyword_filters))
+                keyword_chunks = keyword_query.limit(10).all()
+        
+        # 4. Chunk'ları birleştir ve benzersiz hale getir
+        all_found_chunks = {}
+        for chunk in vector_chunks + keyword_chunks:
+            if chunk.id not in all_found_chunks:
+                all_found_chunks[chunk.id] = chunk
+        
+        closest_chunks = list(all_found_chunks.values())
+        
+        # Eğer hiç chunk bulunamadıysa
         if not closest_chunks:
             return {"answer": "Üzgünüm, dokümanlarda bununla ilgili bilgi bulamadım.", "sources": []}
         
-        # 4. Bağlamı (Context) Birleştir
+        # 5. Chunk'ları benzerlik skoruna göre sırala ve en iyi 8'ini al
+        # (Vektörel arama sonuçları genelde daha iyi olduğu için önce onları alıyoruz)
+        if len(closest_chunks) > 8:
+            # Vektörel arama sonuçlarını önceliklendir
+            vector_chunk_ids = {chunk.id for chunk in vector_chunks}
+            prioritized = [chunk for chunk in closest_chunks if chunk.id in vector_chunk_ids]
+            others = [chunk for chunk in closest_chunks if chunk.id not in vector_chunk_ids]
+            closest_chunks = (prioritized + others)[:8]
+        
+        # 6. Bağlamı (Context) Birleştir
         context_text = "\n\n".join([chunk.chunk_text for chunk in closest_chunks])
         all_chunks = closest_chunks
         
-        # 5. Gemini'ye Prompt Hazırla (RAG Prompt)
+        # 7. Gemini'ye Prompt Hazırla (İyileştirilmiş RAG Prompt)
         llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.3)
         
-        system_prompt = """Sen yardımcı bir asistansın. Aşağıdaki bağlamı (context) kullanarak kullanıcının sorusunu cevapla.
-        Eğer cevap bağlamda yoksa 'Bilmiyorum' de, uydurma.
+        system_prompt = """Sen yardımcı bir AI asistansın. Aşağıdaki doküman parçalarını (context) kullanarak kullanıcının sorusunu detaylı ve kapsamlı bir şekilde cevapla.
+
+ÖNEMLİ KURALLAR:
+1. Verilen bağlamdaki bilgileri kullanarak soruyu cevapla
+2. Eğer sorudaki anahtar kelimeler veya konular bağlamda geçiyorsa, o konuyu detaylıca açıkla
+3. Bağlamda ilgili bilgiler varsa, bunları birleştirerek kapsamlı bir cevap ver
+4. Sadece bağlamda kesinlikle hiçbir ilgili bilgi yoksa "Bu konu hakkında dokümanlarda yeterli bilgi bulunamadı" de
+5. Bağlamda geçen terimler, kavramlar ve açıklamaları kullan
+
+Bağlam (Doküman Parçaları):
+{context}
+"""
         
-        Bağlam:
-        {context}
-        """
-        
-        user_message = f"Soru: {question}"
+        user_message = f"Kullanıcı sorusu: {question}\n\nLütfen yukarıdaki bağlamı kullanarak bu soruyu detaylı ve kapsamlı bir şekilde cevapla. Eğer bağlamda ilgili bilgiler varsa, bunları birleştirerek açıkla."
     
     messages = [
         SystemMessage(content=system_prompt.format(context=context_text)),
@@ -187,10 +253,15 @@ def get_answer_from_docs(question: str, db: Session, doc_id: int = None):
     # 6. Cevabı Üret
     response = llm.invoke(messages)
     
-    # Kaynakları benzersiz hale getir
-    unique_sources = list(set([chunk.document_id for chunk in all_chunks]))
+    # Kaynakları benzersiz hale getir ve dosya adlarını al
+    unique_doc_ids = list(set([chunk.document_id for chunk in all_chunks]))
+    
+    # Dosya adlarını veritabanından al
+    source_documents = db.query(Document).filter(Document.id.in_(unique_doc_ids)).all()
+    source_filenames = [doc.filename for doc in source_documents]
     
     return {
         "answer": response.content,
-        "sources": unique_sources # Hangi dokümandan geldiği
+        "sources": unique_doc_ids,  # Geriye dönük uyumluluk için ID'ler de döndürülüyor
+        "source_filenames": source_filenames  # Dosya adları
     }

@@ -39,4 +39,9 @@ export const askQuestion = async (question, docId = null) => {
     return response.data;
 };
 
+export const deleteDocument = async (docId) => {
+    const response = await api.delete(`/documents/${docId}`);
+    return response.data;
+};
+
 export default api;

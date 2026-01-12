@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { uploadDocument, askQuestion, getDocuments } from './api';
-import { FaPaperPlane, FaFileUpload, FaRobot, FaUser, FaFilePdf, FaFileAlt } from 'react-icons/fa';
+import { uploadDocument, askQuestion, getDocuments, deleteDocument } from './api';
+import { FaPaperPlane, FaFileUpload, FaRobot, FaUser, FaFilePdf, FaFileAlt, FaTrash } from 'react-icons/fa';
 import './App.css';
 
 function App() {
@@ -66,6 +66,25 @@ function App() {
     }
   };
 
+  const handleDeleteDocument = async (docId, filename) => {
+    if (!window.confirm(`"${filename}" dokümanını silmek istediğinize emin misiniz?`)) {
+      return;
+    }
+
+    try {
+      await deleteDocument(docId);
+      // Silinen doküman seçiliyse seçimi temizle
+      if (selectedDocId === docId) {
+        setSelectedDocId(null);
+      }
+      // Doküman listesini yenile
+      await loadDocuments();
+    } catch (error) {
+      console.error('Doküman silinirken hata:', error);
+      alert('Doküman silinirken bir hata oluştu.');
+    }
+  };
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!question.trim()) return;
@@ -80,7 +99,8 @@ function App() {
       setChatHistory(prev => [...prev, { 
         type: 'bot', 
         text: result.answer,
-        sources: result.sources 
+        sources: result.sources,
+        sourceFilenames: result.source_filenames || []
       }]);
     } catch (error) {
       setChatHistory(prev => [...prev, { type: 'bot', text: 'Üzgünüm, bir hata oluştu.' }]);
@@ -122,23 +142,47 @@ function App() {
         </div>
 
         <div className="document-selection-section">
-          <h3>📚 Doküman Seç</h3>
-          <select 
-            value={selectedDocId || ''} 
-            onChange={(e) => setSelectedDocId(e.target.value ? parseInt(e.target.value) : null)}
-            className="document-select"
-          >
-            <option value="">Tüm Dokümanlar</option>
-            {documents.map((doc) => (
-              <option key={doc.id} value={doc.id}>
-                {doc.filename}
-              </option>
-            ))}
-          </select>
-          {selectedDocId && (
-            <div className="selected-doc-info">
-              <small>Seçili: {documents.find(d => d.id === selectedDocId)?.filename}</small>
+          <h3>📚 Dokümanlar</h3>
+          {documents.length === 0 ? (
+            <div className="no-documents">
+              <small>Henüz doküman yüklenmedi.</small>
             </div>
+          ) : (
+            <>
+              <select 
+                value={selectedDocId || ''} 
+                onChange={(e) => setSelectedDocId(e.target.value ? parseInt(e.target.value) : null)}
+                className="document-select"
+              >
+                <option value="">Tüm Dokümanlar</option>
+                {documents.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.filename}
+                  </option>
+                ))}
+              </select>
+              {selectedDocId && (
+                <div className="selected-doc-info">
+                  <small>Seçili: {documents.find(d => d.id === selectedDocId)?.filename}</small>
+                </div>
+              )}
+              <div className="document-list">
+                {documents.map((doc) => (
+                  <div key={doc.id} className="document-item">
+                    <span className="document-name" title={doc.filename}>
+                      {doc.filename}
+                    </span>
+                    <button
+                      onClick={() => handleDeleteDocument(doc.id, doc.filename)}
+                      className="delete-doc-btn"
+                      title="Sil"
+                    >
+                      <FaTrash />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -150,8 +194,10 @@ function App() {
               <div className="avatar">{msg.type === 'bot' ? <FaRobot /> : <FaUser />}</div>
               <div className="bubble">
                 <p>{msg.text}</p>
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="sources"><small>Kaynak ID: {msg.sources.join(', ')}</small></div>
+                {msg.sourceFilenames && msg.sourceFilenames.length > 0 && (
+                  <div className="sources">
+                    <small>Kaynak: {msg.sourceFilenames.join(', ')}</small>
+                  </div>
                 )}
               </div>
             </div>

@@ -72,6 +72,25 @@ async def get_documents(db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/documents/{doc_id}")
+async def delete_document(doc_id: int, db: Session = Depends(get_db)):
+    """Belirli bir dokümanı sil"""
+    try:
+        document = db.query(Document).filter(Document.id == doc_id).first()
+        if not document:
+            raise HTTPException(status_code=404, detail="Doküman bulunamadı.")
+        
+        # Cascade delete sayesinde chunk'lar da otomatik silinir
+        db.delete(document)
+        db.commit()
+        
+        return {"status": "success", "message": f"Doküman '{document.filename}' başarıyla silindi."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/ask")
 async def ask_question(request: QueryRequest, db: Session = Depends(get_db)):
     try:
