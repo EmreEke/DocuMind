@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
-import { uploadPDF, askQuestion } from './api';
-import { FaPaperPlane, FaFileUpload, FaRobot, FaUser, FaFilePdf } from 'react-icons/fa';
+import { uploadDocument, askQuestion, getDocuments } from './api';
+import { FaPaperPlane, FaFileUpload, FaRobot, FaUser, FaFilePdf, FaFileAlt } from 'react-icons/fa';
 import './App.css';
 
 function App() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null);
+  
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocId, setSelectedDocId] = useState(null);
   
   const [question, setQuestion] = useState('');
   const [chatHistory, setChatHistory] = useState([
@@ -24,6 +27,20 @@ function App() {
     scrollToBottom();
   }, [chatHistory]);
 
+  // Doküman listesini yükle
+  useEffect(() => {
+    loadDocuments();
+  }, []);
+
+  const loadDocuments = async () => {
+    try {
+      const result = await getDocuments();
+      setDocuments(result.documents || []);
+    } catch (error) {
+      console.error('Dokümanlar yüklenirken hata:', error);
+    }
+  };
+
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
     setUploadStatus(null);
@@ -33,8 +50,14 @@ function App() {
     if (!file) return;
     setUploading(true);
     try {
-      const result = await uploadPDF(file);
+      const result = await uploadDocument(file);
       setUploadStatus(`Başarılı! Doküman ${result.chunks_count} parçaya bölündü.`);
+      // Yükleme sonrası doküman listesini yenile
+      await loadDocuments();
+      // Yüklenen dokümanı otomatik seç
+      if (result.doc_id) {
+        setSelectedDocId(result.doc_id);
+      }
     } catch (error) {
       console.error(error);
       setUploadStatus('Hata: Yükleme başarısız oldu.');
@@ -53,7 +76,7 @@ function App() {
     setLoading(true);
 
     try {
-      const result = await askQuestion(question);
+      const result = await askQuestion(question, selectedDocId);
       setChatHistory(prev => [...prev, { 
         type: 'bot', 
         text: result.answer,
@@ -77,9 +100,13 @@ function App() {
         <div className="upload-section">
           <h3>📁 Doküman Yükle</h3>
           <div className="file-input-wrapper">
-            <input type="file" accept=".pdf" onChange={handleFileChange} id="file-upload" hidden />
+            <input type="file" accept=".pdf,.txt" onChange={handleFileChange} id="file-upload" hidden />
             <label htmlFor="file-upload" className="file-label">
-              <FaFilePdf /> {file ? file.name : "PDF Seçin..."}
+              {file ? (
+                file.name.endsWith('.txt') ? <FaFileAlt /> : <FaFilePdf />
+              ) : (
+                <FaFilePdf />
+              )} {file ? file.name : "PDF veya TXT Seçin..."}
             </label>
           </div>
           
@@ -90,6 +117,27 @@ function App() {
           {uploadStatus && (
             <div className={`status-msg ${uploadStatus.includes('Hata') ? 'error' : 'success'}`}>
               {uploadStatus}
+            </div>
+          )}
+        </div>
+
+        <div className="document-selection-section">
+          <h3>📚 Doküman Seç</h3>
+          <select 
+            value={selectedDocId || ''} 
+            onChange={(e) => setSelectedDocId(e.target.value ? parseInt(e.target.value) : null)}
+            className="document-select"
+          >
+            <option value="">Tüm Dokümanlar</option>
+            {documents.map((doc) => (
+              <option key={doc.id} value={doc.id}>
+                {doc.filename}
+              </option>
+            ))}
+          </select>
+          {selectedDocId && (
+            <div className="selected-doc-info">
+              <small>Seçili: {documents.find(d => d.id === selectedDocId)?.filename}</small>
             </div>
           )}
         </div>

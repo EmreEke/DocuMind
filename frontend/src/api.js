@@ -10,7 +10,7 @@ const api = axios.create({
     },
 });
 
-export const uploadPDF = async (file) => {
+export const uploadDocument = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
 
@@ -23,8 +23,19 @@ export const uploadPDF = async (file) => {
     return response.data;
 };
 
-export const askQuestion = async (question) => {
-    const response = await api.post('/ask', { question });
+// Geriye dönük uyumluluk için eski fonksiyon adını da tutuyoruz
+export const uploadPDF = uploadDocument;
+
+export const getDocuments = async () => {
+    const response = await api.get('/documents');
+    return response.data;
+};
+
+export const askQuestion = async (question, docId = null) => {
+    const response = await api.post('/ask', { 
+        question,
+        doc_id: docId 
+    });
     return response.data;
 };
 

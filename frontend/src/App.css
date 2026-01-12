@@ -29,3 +29,8 @@ body, html, #root { height: 100%; background-color: #1a1a1a; color: #e0e0e0; }
 .input-area button:hover { transform: scale(1.1); }
 .sources { margin-top: 5px; font-size: 0.7rem; color: #888; border-top: 1px solid #444; padding-top: 5px; }
 .typing { font-style: italic; color: #888; }
+.document-selection-section { background: #2d2d30; padding: 15px; border-radius: 8px; border: 1px solid #3e3e42; }
+.document-select { width: 100%; padding: 10px; background-color: #3e3e42; color: white; border: 1px solid #4e4e52; border-radius: 4px; cursor: pointer; font-size: 0.9rem; outline: none; }
+.document-select:hover { background-color: #4e4e52; }
+.document-select:focus { border-color: #646cff; }
+.selected-doc-info { margin-top: 8px; padding: 6px; background-color: #1e3a29; border-radius: 4px; color: #4ade80; font-size: 0.8rem; }
