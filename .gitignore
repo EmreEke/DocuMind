@@ -1,0 +1,24 @@
+# Python sanal ortamı
+venv/
+backend/venv/
+__pycache__/
+*.pyc
+
+# Ortam değişkenleri ve Şifreler (GÜVENLİK İÇİN KRİTİK)
+.env
+.env.*
+
+# Docker veritabanı kalıntıları
+documind_data/
+
+# IDE dosyaları
+.vscode/
+.idea/
+
+# İşletim sistemi dosyaları
+.DS_Store
+Thumbs.db
+
+# Yüklenen test dosyaları
+*.pdf
+temp_*.pdf
