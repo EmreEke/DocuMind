@@ -4,8 +4,17 @@ from sqlalchemy import text
 from database import get_db
 from ai_service import process_and_store_pdf, get_answer_from_docs
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="DocuMind API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class QueryRequest(BaseModel):
     question: str
